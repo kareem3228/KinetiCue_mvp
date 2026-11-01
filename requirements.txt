@@ -1,0 +1,10 @@
+mediapipe>=0.10.21,<0.11
+opencv-python>=4.10,<5
+numpy>=1.26,<3
+protobuf>=4.25.8,<5
+Pillow>=10,<12
+requests>=2.31,<3
+vosk>=0.3.45
+sounddevice>=0.5
+faster-whisper>=1.1
+piper-tts>=1.8
