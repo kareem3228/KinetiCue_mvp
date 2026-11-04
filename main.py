@@ -13,10 +13,11 @@ from clinical_angle import (
     assess_rep_checks,
     camera_angle_to_flexion_degrees,
 )
-from movement import KneeExtensionAnalyzer
+from movement import KneeExtensionAnalyzer, SquatAnalyzer
 from session_report import build_report, save_report
 from vision import PoseTracker
 from voice_agent import HandsFreeVoice
+from exercise_catalog import EXERCISES, get_exercise
 
 BG, GREEN, INK, MUTED = "#f4f3ee", "#286b53", "#20352e", "#738079"
 
@@ -43,6 +44,8 @@ class PhysioPoseApp:
             "repetitions": 0,
         }
         self.analyzer = KneeExtensionAnalyzer()
+        self.exercise_type = "knee_extension"
+        self.target_repetitions = 8
         self.instructor = Instructor()
         self.prescribed_hold_seconds = 1.0
         self.minimum_cycle_seconds = 2.0
@@ -93,10 +96,24 @@ class PhysioPoseApp:
         tk.Label(frame, text=title, bg=parent.cget("bg"), fg=INK, font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(0, 3))
         widget.pack(fill="x")
 
+    def _exercise(self):
+        return get_exercise(self.exercise_type)
+
+    def _selected_exercise(self):
+        label = self.exercise_choice.get() if hasattr(self, "exercise_choice") else "Seated knee extension"
+        return "squat" if label == "Squat" else "knee_extension"
+
+    def _update_exercise_preview(self, *_args):
+        self.exercise_type = self._selected_exercise()
+        item = self._exercise()
+        if hasattr(self, "exercise_description") and self.exercise_description.winfo_exists():
+            joints = ", ".join(item["required_joints"])
+            self.exercise_description.configure(text=f"{item['checkin_instructions']}\n\nCamera tracking requires {len(item['required_joints'])} joints: {joints}.")
+
     def _show_checkin(self):
         self._page()
         self._eyebrow(self.page, "YOUR HOME EXERCISE SESSION")
-        tk.Label(self.page, text="Seated knee extension", bg=BG, fg=INK, font=("Segoe UI", 28, "bold")).pack(anchor="w", pady=(5, 2))
+        tk.Label(self.page, text="Choose your exercise", bg=BG, fg=INK, font=("Segoe UI", 28, "bold")).pack(anchor="w", pady=(5, 2))
         tk.Label(self.page, text="A simple demo of camera-based movement tracking and an AI instructor.", bg=BG, fg=MUTED, font=("Segoe UI", 11)).pack(anchor="w", pady=(0, 16))
         card = tk.LabelFrame(self.page, text="Before we begin", bg="white", fg=INK, padx=16, pady=12, font=("Segoe UI", 11, "bold"))
         card.pack(fill="x")
@@ -108,17 +125,30 @@ class PhysioPoseApp:
         self._field(card, "Any new symptoms or concerns?", ttk.Entry(card, textvariable=self.pre_symptoms))
         exercise = tk.LabelFrame(self.page, text="Your prescribed movement", bg="white", fg=INK, padx=16, pady=12, font=("Segoe UI", 11, "bold"))
         exercise.pack(fill="x", pady=14)
-        tk.Label(exercise, text="Sit tall in a stable chair. Slowly straighten your leg, then lower it with control.", bg="white", fg=INK, wraplength=850, justify="left").pack(anchor="w")
+        names = {"knee_extension": "Seated knee extension", "squat": "Squat"}
+        default_name = names.get(self.exercise_type, names["knee_extension"])
+        self.exercise_choice = tk.StringVar(value=default_name)
+        _field_label = ttk.Combobox(exercise, textvariable=self.exercise_choice, values=list(names.values()), state="readonly")
+        _field_label.pack(fill="x", pady=(0, 8))
+        _field_label.bind("<<ComboboxSelected>>", self._update_exercise_preview)
+        self.exercise_description = tk.Label(exercise, text="", bg="white", fg=INK, wraplength=850, justify="left")
+        self.exercise_description.pack(anchor="w")
         tk.Label(exercise, text="1 demo set · 8 repetitions · stay in your comfortable prescribed range", bg="white", fg=GREEN, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=9)
+        self._update_exercise_preview()
         tk.Label(self.page, text="Stop if pain increases. This demo does not diagnose or change your plan.", bg=BG, fg=MUTED, font=("Segoe UI", 9)).pack(anchor="w")
         ttk.Button(self.page, text="Continue to camera setup →", command=self._show_setup).pack(anchor="w", pady=15)
 
     def _show_setup(self):
         self.pre = {"feeling": self.pre_feeling.get(), "pain": self.pre_pain.get(), "symptoms": self.pre_symptoms.get().strip()}
+        self.exercise_type = self._selected_exercise()
+        self.target_repetitions = self._exercise()["target_repetitions"]
         self._page()
         self._eyebrow(self.page, "SESSION PREPARATION")
         tk.Label(self.page, text="Set up your camera", bg=BG, fg=INK, font=("Segoe UI", 25, "bold")).pack(anchor="w", pady=5)
-        tk.Label(self.page, text="Face your side toward the camera, not your front. Put it beside the exercising leg at knee height, then move it back until your hip, knee and ankle all fit. Keep blankets or furniture from blocking the leg, and use bright, even light.", bg=BG, fg=MUTED, wraplength=800, justify="left").pack(anchor="w")
+        item = self._exercise()
+        joints = ", ".join(item["required_joints"])
+        tk.Label(self.page, text=item["camera_instructions"], bg=BG, fg=MUTED, wraplength=800, justify="left").pack(anchor="w")
+        tk.Label(self.page, text=f"This exercise uses {len(item['required_joints'])} required joints: {joints}.", bg=BG, fg=GREEN, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(5, 8))
         self.tracking_side = tk.StringVar(value="Auto (choose once)")
         self._field(self.page, "Which leg should the camera track?", ttk.Combobox(self.page, textvariable=self.tracking_side, values=["Auto (choose once)", "My left leg", "My right leg"], state="readonly"))
         tk.Label(self.page, text="Choose the leg closest to the camera. Left and right mean your own sides. The selection stays fixed during the session.", bg=BG, fg=MUTED, wraplength=800, justify="left").pack(anchor="w", pady=(2, 10))
@@ -128,10 +158,11 @@ class PhysioPoseApp:
             text="The live camera estimate uses clinical flexion convention (0° = straight, larger = more bend). It is still a 2D estimate and has not been clinically validated.",
             bg=BG, fg=MUTED, wraplength=800, justify="left",
         ).pack(anchor="w", pady=(0, 8))
-        range_text = f"Form cues: move smoothly through a comfortable range; pause near the endpoint for {self.prescribed_hold_seconds:g} second(s). Stop if pain increases. The camera cannot judge pain or prevent over-stretching."
+        range_text = f"Form cues: move smoothly through a comfortable range; pause near the endpoint for {self.prescribed_hold_seconds:g} second(s). Stop if pain increases."
         self.range_status_label = tk.Label(self.page, text=range_text, bg=BG, fg=MUTED, wraplength=800, justify="left")
         self.range_status_label.pack(anchor="w", pady=(2, 4))
-        tk.Label(self.page, text="Automatic extension ceiling: 10° estimated flexion (camera warning only; not a validated safety limit).", bg=BG, fg=MUTED, wraplength=800).pack(anchor="w")
+        if self.exercise_type == "knee_extension":
+            tk.Label(self.page, text="Camera extension warning: estimated near-full extension only. This is not a medical safety limit.", bg=BG, fg=MUTED, wraplength=800).pack(anchor="w")
         ttk.Button(self.page, text="Set prescribed hold time…", command=self._configure_hold).pack(anchor="w", pady=(2, 6))
         ttk.Button(self.page, text="Set minimum controlled cycle time…", command=self._configure_cycle_time).pack(anchor="w", pady=(2, 6))
         self._speech_model_selector(self.page)
@@ -187,7 +218,10 @@ class PhysioPoseApp:
             side_choice = self.tracking_side.get()
             preferred_side = {"My left leg": "left", "My right leg": "right"}.get(side_choice, "auto")
             self.pose_model_complexity = 2
-            self.tracker = PoseTracker(preferred_side=preferred_side, model_complexity=2)
+            self.exercise_type = self._selected_exercise()
+            self.target_repetitions = self._exercise()["target_repetitions"]
+            self.analyzer = SquatAnalyzer() if self.exercise_type == "squat" else KneeExtensionAnalyzer()
+            self.tracker = PoseTracker(preferred_side=preferred_side, model_complexity=2, exercise_type=self.exercise_type)
             self.tracker.start()
         except Exception as error:
             self.tracker = None
@@ -209,14 +243,15 @@ class PhysioPoseApp:
         self.live_activity = {
             "movement_phase": "acquiring_tracking",
             "tracking_status": "acquiring",
-            "tracking_guidance": "Hold still while the app finds the whole leg.",
+            "tracking_guidance": "Hold still while the app finds the required joints.",
             "repetitions": 0,
         }
         self._show_session()
         if self.pre.get("pain") == "Severe" or self.pre.get("symptoms"):
             self._add_message("instructor", "Please check with your physiotherapist before exercising if you have severe pain or new symptoms. I cannot assess symptoms or decide if it is safe to continue.")
         else:
-            self._add_message("instructor", "Camera is on. Keep your whole leg in view and hold still while I find it. Repetition counting starts when tracking is stable.")
+            joints = ", ".join(self._exercise()["required_joints"])
+            self._add_message("instructor", f"Camera is on. Keep {joints} in view and hold still while I find them. Repetition counting starts when tracking is stable.")
         self._camera_tick()
 
     def _show_session(self):
@@ -247,7 +282,8 @@ class PhysioPoseApp:
         self.form_status_label.pack(anchor="w", pady=(0, 3))
         self.phase_label = tk.Label(left, text="Ready", bg=BG, fg=INK, font=("Segoe UI", 10, "bold"))
         self.phase_label.pack(anchor="w")
-        self.hint_label = tk.Label(left, text="Bend your knee to begin a repetition", bg=BG, fg=MUTED, font=("Segoe UI", 9), wraplength=720, justify="left")
+        initial_hint = "Stand comfortably, then begin a comfortable squat." if self.exercise_type == "squat" else "Bend your knee to begin a repetition"
+        self.hint_label = tk.Label(left, text=initial_hint, bg=BG, fg=MUTED, font=("Segoe UI", 9), wraplength=720, justify="left")
         self.hint_label.pack(anchor="w", pady=2)
         self._speech_model_selector(left)
         controls = tk.Frame(left, bg=BG)
@@ -291,8 +327,8 @@ class PhysioPoseApp:
                     elif now - self.tracking_stable_since >= .75:
                         self.tracking_acquired = True
                         self.started_at = now
-                        self.stage_title.configure(text="Move at a comfortable pace")
-                        self._add_message("instructor", "Tracking is ready. Begin your comfortable bend-and-straighten repetitions.")
+                        self.stage_title.configure(text=f"{self._exercise()['name']} · move comfortably")
+                        self._add_message("instructor", f"Tracking is ready. Begin your comfortable {self._exercise()['short_name'].lower()} repetitions.")
                 else:
                     self.tracking_stable_since = None
             update = self.analyzer.update(reading.angle, reading.reliable, reading.confidence, tracking_ready=reading.ready) if self.tracking_acquired and not self.voice_paused else None
@@ -321,7 +357,8 @@ class PhysioPoseApp:
             self.camera_view.configure(image=photo, text="")
             self.camera_view.image = photo
             self.angle_label.configure(text=f"KNEE FLEXION ESTIMATE\n{round(self.angle)}°" if self.angle is not None else "KNEE FLEXION ESTIMATE\n—°")
-            hip_score, knee_score, ankle_score = reading.landmark_scores
+            joint_scores = dict(zip(reading.joint_names, reading.landmark_scores))
+            score_text = " · ".join(f"{name[:1].upper()} {score:.2f}" for name, score in joint_scores.items())
             if not self.tracking_acquired:
                 quality = "Acquiring"
             elif reading.ready:
@@ -329,15 +366,15 @@ class PhysioPoseApp:
             elif reading.side is None:
                 quality = "Pose lost"
             else:
-                weak_joints = [name for name, score in zip(("hip", "knee", "ankle"), reading.landmark_scores) if score < .50]
+                weak_joints = [name for name, score in joint_scores.items() if score < .50]
                 quality = "Adjust " + " + ".join(weak_joints) + " view" if weak_joints else "Adjust camera view"
             status_color = GREEN if self.tracking_acquired and reading.ready else "#a56b00" if reading.reliable or not self.tracking_acquired else "#a5523d"
-            self.quality_label.configure(text=f"TRACKING\n{quality}\nH {hip_score:.2f} · K {knee_score:.2f} · A {ankle_score:.2f}", fg=status_color)
-            self.rep_label.configure(text=f"MOVEMENT CYCLES\n{self.analyzer.repetitions} / 8")
+            self.quality_label.configure(text=f"TRACKING\n{quality}\n{score_text}", fg=status_color)
+            self.rep_label.configure(text=f"MOVEMENT CYCLES\n{self.analyzer.repetitions} / {self.target_repetitions}")
             if not self.tracking_acquired:
                 self.phase_label.configure(text="Finding your leg…")
-                self.hint_label.configure(text=reading.guidance or "Hold still and keep hip, knee and ankle visible.", fg=status_color)
-                self.quality_label.configure(text=f"TRACKING\nAcquiring\nH {hip_score:.2f} · K {knee_score:.2f} · A {ankle_score:.2f}", fg=status_color)
+                self.hint_label.configure(text=reading.guidance or f"Hold still and keep {', '.join(reading.joint_names)} visible.", fg=status_color)
+                self.quality_label.configure(text=f"TRACKING\nAcquiring\n{score_text}", fg=status_color)
             elif self.voice_paused:
                 self.phase_label.configure(text="Paused")
                 self.hint_label.configure(text="Rep counting is paused. Say ‘resume’ to continue.", fg=MUTED)
@@ -353,22 +390,26 @@ class PhysioPoseApp:
                 "movement_phase": phase,
                 "phase_description": {
                     "acquiring_tracking": "waiting for the app to find the leg",
-                    "waiting": "waiting for the next bend",
+                    "waiting": "waiting for the next movement",
                     "flexed": "knee is bent; the user can begin straightening",
                     "extending": "leg is being straightened",
                     "lowering": "leg is being lowered after extension",
+                    "moving": "the user is lowering into a squat",
+                    "returning": "the user is returning to standing",
                     "paused": "rep measurement is paused",
                 }.get(phase, phase),
                 "tracking_status": tracking_status,
                 "tracking_confidence": round(float(reading.confidence), 2),
-                "joint_confidence": {name: round(float(score), 2) for name, score in zip(("hip", "knee", "ankle"), reading.landmark_scores)},
+                "joint_confidence": {name: round(float(score), 2) for name, score in joint_scores.items()},
+                "exercise": self.exercise_type,
+                "required_joints": list(reading.joint_names),
                 "tracking_guidance": reading.guidance or reading.reason or (update.hint if update else "Waiting for tracking."),
                 "camera_knee_flexion_estimate_degrees": round(self.angle) if self.angle is not None else None,
                 "repetitions": self.analyzer.repetitions,
                 "tracking_side": reading.side or None,
             }
             if update and update.event:
-                update.event["form_checks"] = assess_rep_checks(update.event, minimum_hold_seconds=self.prescribed_hold_seconds, minimum_cycle_seconds=self.minimum_cycle_seconds)
+                update.event["form_checks"] = assess_rep_checks(update.event, minimum_hold_seconds=self.prescribed_hold_seconds, minimum_cycle_seconds=self.minimum_cycle_seconds, exercise_type=self.exercise_type)
                 self._handle_event(update.event)
         elapsed = int(time.monotonic() - self.started_at) if self.started_at is not None else 0
         self.timer_label.configure(text=f"{elapsed // 60:02d}:{elapsed % 60:02d}")
@@ -379,12 +420,12 @@ class PhysioPoseApp:
         recent_events = [
             {key: event.get(key) for key in (
                 "rep_number", "movement_cycle_status", "peak_angle_degrees", "excursion_degrees",
-                "extension_hold_seconds", "rep_duration_seconds", "form_checks", "instructor_feedback",
+                "extension_hold_seconds", "endpoint_hold_seconds", "rep_duration_seconds", "form_checks", "instructor_feedback",
             ) if key in event}
             for event in self.events[-3:]
         ]
         return {
-            "exercise": "Seated knee extension",
+            "exercise": self._exercise()["name"],
             "camera_knee_flexion_estimate_degrees": round(self.angle) if self.angle is not None else None,
             "tracking_reliable": self.angle is not None,
             "repetitions": self.analyzer.repetitions,
@@ -395,7 +436,7 @@ class PhysioPoseApp:
             "live_activity": dict(self.live_activity),
             "session_summary": self._session_summary(),
             "current_plan": {
-                "exercise": "Seated knee extension",
+                "exercise": self._exercise()["name"],
                 "target_repetitions": self.analyzer.repetition_target,
                 "endpoint_hold_seconds": self.prescribed_hold_seconds,
                 "minimum_cycle_seconds": self.minimum_cycle_seconds,
@@ -404,7 +445,8 @@ class PhysioPoseApp:
                     "Pause near the comfortable endpoint for the configured hold.",
                     "Stop if pain increases.",
                 ],
-                "limits": "The camera cannot determine a safe range or pain. Its extension warning is an unvalidated prototype estimate, not a medical limit.",
+                "limits": "The camera cannot determine a safe range or pain. Camera values are movement estimates, not medical limits.",
+                "required_joints": list(self._exercise()["required_joints"]),
             },
             "patient_reported_symptom_count": len(self.symptom_reports),
         }
@@ -413,18 +455,20 @@ class PhysioPoseApp:
         completed = [event for event in self.events if event.get("movement_cycle_status") == "completed"]
         def count(check_name, status):
             return sum((event.get("form_checks") or {}).get(check_name, {}).get("status") == status for event in completed)
-        return {
+        summary = {
             "completed_repetitions": len(completed),
             "hold": {status: count("hold", status) for status in ("met", "not_met", "unable_to_assess")},
             "cycle_pace": {status: count("cycle_control", status) for status in ("met", "not_met", "unable_to_assess")},
-            "extension_warning": {"reached": count("extension_ceiling", "past_default_ceiling"), "unable_to_assess": count("extension_ceiling", "unable_to_assess")},
             "symptom_reports_recorded": len(self.symptom_reports),
             "patient_reported_feedback_fields": sorted(self.voice_session_feedback),
             "note": "Counts describe configured prototype checks, not clinical form or safety assessments.",
         }
+        if self.exercise_type == "knee_extension":
+            summary["extension_warning"] = {"reached": count("extension_ceiling", "past_default_ceiling"), "unable_to_assess": count("extension_ceiling", "unable_to_assess")}
+        return summary
 
     def _handle_event(self, event):
-        event.update({"tracking_confidence": round(self.confidence, 2), "exercise": "seated_knee_extension"})
+        event.update({"tracking_confidence": round(self.confidence, 2), "exercise": self.exercise_type})
         checks = event.get("form_checks", {})
         hold = checks.get("hold", {})
         control = checks.get("cycle_control", {})
@@ -433,9 +477,11 @@ class PhysioPoseApp:
         event["rep_number"] = rep
         # Keep the live instructor to one useful cue; full measurements and each
         # rule result remain in event['form_checks'] for the report.
-        if any(check.get("status") == "unable_to_assess" for check in (hold, control, limit)):
-            message = f"Rep {rep} counted. I couldn't check one part because tracking dropped; keep your whole leg visible."
-        elif limit.get("status") == "past_default_ceiling":
+        active_checks = (hold, control, limit) if self.exercise_type == "knee_extension" else (hold, control)
+        if any(check.get("status") == "unable_to_assess" for check in active_checks):
+            joints = ", ".join(self._exercise()["required_joints"])
+            message = f"Rep {rep} counted. I couldn't check one part because tracking dropped; keep {joints} visible."
+        elif self.exercise_type == "knee_extension" and limit.get("status") == "past_default_ceiling":
             message = f"Rep {rep} counted. The camera reached its extension warning; ease back a little if comfortable."
         elif hold.get("status") == "not_met":
             observed = hold.get("observed_seconds", 0)
@@ -452,7 +498,7 @@ class PhysioPoseApp:
         self.events.append(event)
         if self.guided.get():
             needs_llm_cue = (
-                limit.get("status") == "past_default_ceiling"
+                (self.exercise_type == "knee_extension" and limit.get("status") == "past_default_ceiling")
                 or hold.get("status") == "not_met"
                 or control.get("status") == "not_met"
             )
@@ -725,7 +771,9 @@ class PhysioPoseApp:
             movement_events = [event for event in self.events if event.get("movement_cycle_status") == "completed"]
             report = build_report(self.analyzer.repetitions, self.elapsed, self.angles, self.analyzer.errors, self.pre, post,
                                   angle_trace=self.angle_trace, patient_reported_repetitions=actual_repetitions,
-                                  movement_events=movement_events, prescribed_hold_seconds=self.prescribed_hold_seconds)
+                                  movement_events=movement_events, prescribed_hold_seconds=self.prescribed_hold_seconds,
+                                  exercise_type=self.exercise_type, target_repetitions=self.target_repetitions,
+                                  tracked_joints=self._exercise()["required_joints"])
             path = save_report(report)
         except Exception as error:
             messagebox.showerror("Could not create session report", f"The report could not be saved.\n\n{error}", parent=self.root)
@@ -737,7 +785,7 @@ class PhysioPoseApp:
         self._eyebrow(self.page, "SESSION SUMMARY")
         tk.Label(self.page, text="Your report", bg=BG, fg=INK, font=("Segoe UI", 25, "bold")).pack(anchor="w", pady=8)
         measured = report["measured_by_camera"]
-        self._report_card("MOVEMENT CYCLES DETECTED", f"Pose model: {measured['pose_model']}\nCompleted cycles: {measured['repetitions']} / 8\n{measured['angle_summary']}\nReliable samples: {measured['reliable_samples']}")
+        self._report_card(f"{report['exercise_name'].upper()} CYCLES DETECTED", f"Required joints: {', '.join(report['required_joints'])}\nPose model: {measured['pose_model']}\nCompleted cycles: {measured['repetitions']} / {measured['target_repetitions']}\n{measured['angle_summary']}\nReliable samples: {measured['reliable_samples']}")
         performance = measured["performance"]
         hold_pct = performance["hold_met_percent_of_assessable"]
         performance_text = (
@@ -755,7 +803,10 @@ class PhysioPoseApp:
                              f"Average endpoint hold: {performance['mean_endpoint_hold_seconds']} s\n")
         for item in performance["per_rep"]:
             performance_text += (f"Rep {item['rep']}: range {item['estimated_range_degrees']}° · duration {item['cycle_duration_seconds']}s · "
-                                 f"hold {item['endpoint_hold_seconds']}s · pace {item['cycle_pace_check'].replace('_',' ')} · extension ceiling {item['extension_ceiling_check'].replace('_',' ')}\n")
+                                 f"hold {item['endpoint_hold_seconds']}s · pace {item['cycle_pace_check'].replace('_',' ')}")
+            if self.exercise_type == "knee_extension":
+                performance_text += f" · extension warning {item['extension_ceiling_check'].replace('_',' ')}"
+            performance_text += "\n"
         performance_text += performance["note"]
         self._report_card("SESSION PERFORMANCE · CAMERA ESTIMATES", performance_text)
         if actual_repetitions is not None:

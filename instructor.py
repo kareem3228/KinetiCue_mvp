@@ -12,9 +12,9 @@ class Instructor:
         {"type": "function", "function": {"name": "finish_exercise", "description": "Finish the current exercise session only when the user clearly says they are done or asks to finish.", "parameters": {"type": "object", "properties": {}}}},
         {"type": "function", "function": {"name": "repeat_last_cue", "description": "Repeat the most recent movement cue when the user asks to repeat it.", "parameters": {"type": "object", "properties": {}}}},
         {"type": "function", "function": {"name": "get_current_activity", "description": "Read the latest pose-tracking snapshot when the user asks what their leg is doing, what movement phase is detected, or whether tracking is working.", "parameters": {"type": "object", "properties": {}}}},
-        {"type": "function", "function": {"name": "get_last_rep_result", "description": "Read the latest completed repetition and its measured hold, pace, extension-warning, and tracking results when the user asks how the last rep went or why a check missed.", "parameters": {"type": "object", "properties": {}}}},
+        {"type": "function", "function": {"name": "get_last_rep_result", "description": "Read the latest completed repetition and its measured hold, pace, and tracking results when the user asks how the last rep went or why a check missed.", "parameters": {"type": "object", "properties": {}}}},
         {"type": "function", "function": {"name": "coach_from_latest_check", "description": "When the user asks how to improve or correct the latest repetition, read its configured check results and give one specific cue. Do not invent a clinical form fault.", "parameters": {"type": "object", "properties": {}}}},
-        {"type": "function", "function": {"name": "get_session_summary", "description": "Read aggregate hold, pace, extension-warning, and tracking-check counts across all completed repetitions when the user asks about overall progress or session performance.", "parameters": {"type": "object", "properties": {}}}},
+        {"type": "function", "function": {"name": "get_session_summary", "description": "Read aggregate movement-check and tracking counts across all completed repetitions when the user asks about overall progress or session performance.", "parameters": {"type": "object", "properties": {}}}},
         {"type": "function", "function": {"name": "get_current_plan", "description": "Read the exercise targets and instructions currently configured in this demo when the user asks what the plan says. Do not change the plan.", "parameters": {"type": "object", "properties": {}}}},
         {"type": "function", "function": {"name": "record_symptom_report", "description": "Record a symptom the user explicitly reports during the session. Capture only what they said; do not infer severity or diagnose. If they report current or worsening pain, also call pause_exercise.", "parameters": {"type": "object", "properties": {"report": {"type": "string", "description": "Brief faithful summary of the user's self-reported symptom."}, "severity_0_to_10": {"type": "integer", "minimum": 0, "maximum": 10, "description": "Only include if the user explicitly gives a number from 0 to 10."}, "body_area": {"type": "string", "description": "Only include the body area the user explicitly identifies."}, "timing": {"type": "string", "description": "When the user says it happened, if stated."}}, "required": ["report"], "additionalProperties": False}}},
         {"type": "function", "function": {"name": "record_session_feedback", "description": "Save self-reported session feedback when the user explicitly asks to record it or clearly provides post-exercise feedback. Do not invent missing values.", "parameters": {"type": "object", "properties": {"feeling": {"type": "string"}, "pain": {"type": "string"}, "actual_repetitions": {"type": "integer", "minimum": 0}, "difficulty": {"type": "string"}, "notes": {"type": "string"}, "report": {"type": "string", "description": "Faithful summary of feedback that does not fit the structured fields."}}, "additionalProperties": False}}},
@@ -48,8 +48,9 @@ class Instructor:
     def reply(self, prompt, context, history=(), event_type=None):
         if not self.api_key:
             return {"text": self.fallback(prompt, context, event_type), "action": None}
+        exercise_name = (context.get("current_plan") or {}).get("exercise", "prescribed movement")
         messages = [{"role": "system", "content": (
-            "You are a warm, conversational voice instructor during a physiotherapist-prescribed seated knee-extension demo. "
+            f"You are a warm, conversational voice instructor during a physiotherapist-prescribed {exercise_name} demo. "
             "Answer the person's actual question directly, naturally, and briefly (usually 1-3 sentences). "
             "Always reply in clear, natural English suitable for spoken conversation. "
             "Vary wording and avoid repeating generic exercise reminders unless relevant. Ask a short follow-up only when needed. "
@@ -59,7 +60,7 @@ class Instructor:
             "Use the matching tool for clear pause/stop, resume/continue, finish/done, or repeat requests. "
             "Use get_current_activity for questions about the live camera or what movement phase is happening. Use get_last_rep_result for questions about the most recent completed rep or a missed check. "
             "Use coach_from_latest_check when the user asks what to change or how to correct the most recent rep. Only give a correction for a configured check that actually missed; if tracking was unable to assess, explain the tracking issue, and if all checks were met, say the app has no measured correction for that rep. "
-            "For missed holds, cue a pause near the comfortable endpoint before lowering; never tell the user to fully straighten or move farther. For an extension warning, suggest easing back slightly. For a fast cycle, cue slowing the whole movement within the comfortable range. "
+            "For missed holds, cue a pause near the comfortable endpoint before returning. Never tell the user to fully straighten or move farther. For a fast cycle, cue slowing the whole movement within the comfortable range. Only knee-extension sessions have the prototype extension warning. "
             "Use get_session_summary for session-wide trends and get_current_plan for the currently configured exercise targets. Never infer an all-session trend from the recent-events sample alone. "
             "Use record_symptom_report only for symptoms the user actually reports. Do not ask for a pain score after every repetition. If worsening pain is reported during exercise, request both pause_exercise and record_symptom_report. Use record_session_feedback for explicit session feedback; treat all such details as patient-reported. "
             "Do not call a tool when the person is asking hypothetically or discussing the app. For pain during exercise, pause first, then briefly advise them to stop if pain increases and contact their physiotherapist. "
@@ -137,7 +138,8 @@ class Instructor:
                 elif hold.get("status") == "not_met":
                     suggestion = "The measured endpoint hold was short; cue a pause near the comfortable endpoint before lowering. Do not cue more extension."
                 elif pace.get("status") == "not_met":
-                    suggestion = "The measured full cycle was faster than its configured duration; cue slowing the bend, straighten, and return within comfort."
+                    movement = "lowering into and rising from the squat" if latest.get("exercise") == "squat" else "bending, straightening, and returning"
+                    suggestion = f"The measured full cycle was faster than its configured duration; cue slowing {movement} within comfort."
                 else:
                     suggestion = "The configured timing and camera-warning checks did not miss; say the app has no measured correction and did not assess clinical form."
                 return {"rep_number": latest.get("rep_number"), "checks": checks, "recorded_result": latest.get("instructor_feedback"), "cue_constraint": suggestion}
@@ -155,7 +157,8 @@ class Instructor:
         elif hold.get("status") == "not_met":
             reason = {"check": "endpoint hold not met", "observed_seconds": hold.get("observed_seconds"), "required_seconds": hold.get("required_seconds"), "instruction": "Cue a brief pause at the comfortable endpoint on the next repetition, only if comfortable."}
         elif control.get("status") == "not_met":
-            reason = {"check": "cycle duration below configured minimum", "observed_seconds": control.get("observed_seconds"), "minimum_seconds": control.get("minimum_seconds"), "instruction": "Cue a slower bend, straighten, and return on the next repetition."}
+            movement = "lowering into and rising from the squat" if event.get("exercise_type") == "squat" else "bend, straighten, and return"
+            reason = {"check": "cycle duration below configured minimum", "observed_seconds": control.get("observed_seconds"), "minimum_seconds": control.get("minimum_seconds"), "instruction": f"Cue a slower {movement} on the next repetition."}
         else:
             return ""
 
@@ -187,12 +190,18 @@ class Instructor:
     @staticmethod
     def fallback(prompt, context, event_type=None):
         text = (prompt or "").lower()
+        exercise = (context.get("current_plan") or {}).get("exercise", "movement")
         if event_type == "rep_completed":
-            return f"Movement cycle detected: {context.get('repetitions', 0)} of 8. Follow your prescribed comfortable range."
+            return f"{exercise} cycle detected: {context.get('repetitions', 0)} of {(context.get('current_plan') or {}).get('target_repetitions', 8)}. Follow your prescribed comfortable range."
         if any(word in text for word in ("angle", "measurement", "degrees")):
             return "The camera estimates the angle from your hip, knee and ankle. It can shift with camera position, so use it as a rough movement trace rather than a clinical measurement."
         if any(word in text for word in ("pain", "hurt", "symptom")):
             return "Stop if pain increases or you notice a new symptom, and contact your physiotherapist. I can’t assess symptoms or change your plan."
+        if context.get("exercise") == "Squat":
+            if any(word in text for word in ("how", "exercise", "do this", "what should", "what do")):
+                return "Stand near stable support if needed. Lower and return at a comfortable pace, within the range your physiotherapist prescribed. Stop if pain increases."
+            if any(word in text for word in ("rep", "count", "repetition")):
+                return f"I have counted {context.get('repetitions', 0)} squat cycles so far. Camera tracking can miss cycles if your required joints leave view."
         if any(word in text for word in ("how", "exercise", "do this", "what should", "what do")):
             return "Sit tall in a stable chair. Slowly straighten your knee within the range your physiotherapist prescribed, then lower it with control. Stop if pain increases."
         if any(word in text for word in ("rep", "count", "repetition")):

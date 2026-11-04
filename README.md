@@ -1,6 +1,6 @@
 # KinetiCue MVP
 
-A Windows Python demo that tracks seated knee extensions, counts reps, and saves session reports.
+A Windows Python demo that tracks seated knee extensions or squats, counts reps, and saves session reports. The camera checks only the joints needed for the selected exercise: hip, knee, and ankle for extensions; shoulder, hip, knee, and ankle for squats.
 
 ## Setup and run (Windows)
 
@@ -11,13 +11,13 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-If the repository is private, ask the owner for access. Copy `.env.example` to `.env` and add your own Gemini key after `GEMINI_API_KEY=`. Install voice support:
+If the repository is private, ask the owner for access. To enable Gemini instructor and hands-free voice, copy `.env.example` to `.env` and add your own Gemini key after `GEMINI_API_KEY=`. Install voice support:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install --target voice_packages "google-genai>=1.0" "typing_extensions>=4.14.0"
 .\.venv\Scripts\python.exe main.py
 ```
 
-Allow camera and microphone access. Sit sideways with your whole leg visible. Never commit `.env` or share your API key.
+Run `main.py`, choose the exercise, and follow its camera setup instructions. Keep the required joints visible. Never commit `.env` or share your API key.
 
 Reports are saved in `session_reports`. Camera measurements are experimental and are not a clinical assessment.
